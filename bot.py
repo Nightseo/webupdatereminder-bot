@@ -120,7 +120,14 @@ KEYBOARD = InlineKeyboardMarkup([
 ])
 
 
+def is_authorized(update: Update) -> bool:
+    return str(update.effective_user.id) == CHAT_ID
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        await update.message.reply_text("No tienes acceso a este bot.")
+        return
     await update.message.reply_text(
         "\U0001f44b  <b>Web Update Reminder</b>\n\n"
         "Te aviso cada dia a las 7:00 si alguna web necesita actualizarse.\n\n"
@@ -131,6 +138,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
     msg = await update.message.reply_text("\u23f3 Revisando webs...")
     report = build_report()
     await msg.edit_text(report, parse_mode="HTML", reply_markup=KEYBOARD)
@@ -138,6 +147,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not is_authorized(update):
+        await query.answer("No tienes acceso.")
+        return
     await query.answer()
     msg = await query.message.reply_text("\u23f3 Revisando webs...")
     report = build_report()

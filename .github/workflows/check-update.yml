@@ -2,8 +2,8 @@ name: Check Web Update
 
 on:
   schedule:
-    # Runs daily at 9:00 UTC (11:00 Spain)
-    - cron: "0 9 * * *"
+    # Runs daily at 6:00 UTC (7:00 Spain CET)
+    - cron: "0 6 * * *"
   workflow_dispatch: # Allow manual trigger
 
 jobs:

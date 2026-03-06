@@ -1,20 +1,9 @@
 import os
 import re
-import logging
-from typing import Optional
-from datetime import datetime, timezone, timedelta
-
 import requests
+from typing import Optional
 from bs4 import BeautifulSoup
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
-
-logging.basicConfig(level=logging.INFO)
+from datetime import datetime, timezone, timedelta
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
@@ -66,7 +55,13 @@ def build_status(days_since: int, max_days: int):
         return "\u2705", f"Al dia  \u00b7  {remaining} dias restantes"
 
 
-def build_report() -> str:
+def send_telegram(message: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    resp = requests.post(url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"})
+    resp.raise_for_status()
+
+
+def main():
     now = datetime.now(timezone.utc)
     today_spain = now.astimezone(SPAIN_TZ)
     weekday = DAY_NAMES[today_spain.weekday()]
@@ -89,7 +84,6 @@ def build_report() -> str:
             emoji, status = build_status(days_since, MAX_DAYS)
             results.append((site["name"], last_updated, days_since, (emoji, status)))
         except Exception as e:
-            logging.error(f"Error checking {site['name']}: {e}")
             results.append((site["name"], None, None, None))
 
     results.sort(key=lambda r: -r[2] if r[2] is not None else -1)
@@ -112,64 +106,7 @@ def build_report() -> str:
     urgent = sum(1 for r in results if r[2] is not None and r[2] >= MAX_DAYS)
     lines.append(f"\U0001f4ca  {total} webs  \u00b7  {urgent} necesitan atencion")
 
-    return "\n".join(lines)
-
-
-KEYBOARD = InlineKeyboardMarkup([
-    [InlineKeyboardButton("\U0001f504  Revisar estado", callback_data="check_status")]
-])
-
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "\U0001f44b  <b>Web Update Reminder</b>\n\n"
-        "Te aviso cada dia a las 7:00 del estado de las webs.\n\n"
-        "Pulsa el boton para revisar ahora:",
-        parse_mode="HTML",
-        reply_markup=KEYBOARD,
-    )
-
-
-async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("\u23f3 Revisando webs...")
-    report = build_report()
-    await msg.edit_text(report, parse_mode="HTML", reply_markup=KEYBOARD)
-
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    msg = await query.message.reply_text("\u23f3 Revisando webs...")
-    report = build_report()
-    await msg.edit_text(report, parse_mode="HTML", reply_markup=KEYBOARD)
-
-
-async def scheduled_report(context: ContextTypes.DEFAULT_TYPE):
-    report = build_report()
-    await context.bot.send_message(
-        chat_id=CHAT_ID,
-        text=report,
-        parse_mode="HTML",
-        reply_markup=KEYBOARD,
-    )
-
-
-def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CallbackQueryHandler(button_handler, pattern="^check_status$"))
-
-    # Daily report at 7:00 Spain time (6:00 UTC)
-    app.job_queue.run_daily(
-        scheduled_report,
-        time=datetime.strptime("06:00", "%H:%M").time(),
-        days=(0, 1, 2, 3, 4, 5, 6),
-    )
-
-    logging.info("Bot started. Waiting for commands...")
-    app.run_polling()
+    send_telegram("\n".join(lines))
 
 
 if __name__ == "__main__":

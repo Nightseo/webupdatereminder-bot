@@ -189,6 +189,7 @@ async function queryGsc(accessToken, siteUrl, startDate, endDate) {
         endDate,
         dimensions: ["query"],
         rowLimit: 10,
+        dataState: "all",
       }),
     }
   );
@@ -430,12 +431,11 @@ async function handleGsc(token, chatId, text, kv, gscCredentials) {
   try {
     const accessToken = await getGscAccessToken(gscCredentials);
 
-    // Last 3 days (GSC data has ~2 day delay)
+    // Today's fresh data (unfinalized, last 24h)
     const now = new Date();
-    const end = new Date(now); end.setDate(end.getDate() - 1);
-    const start = new Date(now); start.setDate(start.getDate() - 3);
-    const startDate = start.toISOString().split("T")[0];
-    const endDate = end.toISOString().split("T")[0];
+    const today = now.toISOString().split("T")[0];
+    const startDate = today;
+    const endDate = today;
 
     const data = await queryGsc(accessToken, siteUrl, startDate, endDate);
 
@@ -444,7 +444,7 @@ async function handleGsc(token, chatId, text, kv, gscCredentials) {
       `\u{1F4CA}  <b>GSC Report: ${name}</b>`,
       `\u{1F4C5}  ${formatDate(spain)}, ${formatTime(spain)}`,
       `\u{1F310}  ${siteUrl}`,
-      `\u{1F4C6}  Datos: ${startDate} a ${endDate}`,
+      `\u{1F4C6}  Datos: ${today} (ultimas 24h)`,
       "\u2500".repeat(24),
     ];
 

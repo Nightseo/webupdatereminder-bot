@@ -136,6 +136,69 @@ async function editTelegram(token, chatId, messageId, text) {
   });
 }
 
+// ── Google Search Console ───────────────────────────
+
+function base64url(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function getGscAccessToken(credentialsJson) {
+  const creds = JSON.parse(credentialsJson);
+  const now = Math.floor(Date.now() / 1000);
+
+  const header = base64url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
+  const payload = base64url(new TextEncoder().encode(JSON.stringify({
+    iss: creds.client_email,
+    scope: "https://www.googleapis.com/auth/webmasters.readonly",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  })));
+
+  // Import private key
+  const pemBody = creds.private_key.replace(/-----BEGIN PRIVATE KEY-----/, "")
+    .replace(/-----END PRIVATE KEY-----/, "").replace(/\n/g, "");
+  const keyBuf = Uint8Array.from(atob(pemBody), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey("pkcs8", keyBuf, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+
+  // Sign JWT
+  const signInput = `${header}.${payload}`;
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(signInput));
+  const jwt = `${signInput}.${base64url(signature)}`;
+
+  // Exchange for access token
+  const resp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+  });
+  const data = await resp.json();
+  if (!data.access_token) throw new Error(data.error_description || "Failed to get access token");
+  return data.access_token;
+}
+
+async function queryGsc(accessToken, siteUrl, startDate, endDate) {
+  const resp = await fetch(
+    `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(siteUrl)}/searchAnalytics/query`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        startDate,
+        endDate,
+        dimensions: ["query"],
+        rowLimit: 10,
+      }),
+    }
+  );
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`GSC API ${resp.status}: ${body.slice(0, 200)}`);
+  }
+  return await resp.json();
+}
+
 // ── PrimeIndexer ────────────────────────────────────
 
 async function indexUrls(apiKey, projectName, urls) {
@@ -164,11 +227,13 @@ async function handleStart(token, chatId) {
       "/webs \u2014 Listar todas las webs\n" +
       "/addweb \u2014 Anadir una web nueva\n" +
       "/removeweb \u2014 Eliminar una web\n" +
-      "/indexar \u2014 Indexar URLs en PrimeIndexer\n\n" +
+      "/indexar \u2014 Indexar URLs en PrimeIndexer\n" +
+      "/gsc \u2014 Clicks y keywords de Google Search Console\n\n" +
       "<i>Formatos:</i>\n" +
       "<code>/addweb Nombre https://url.com</code>\n" +
       "<code>/removeweb Nombre</code>\n" +
-      "<code>/indexar NombreProyecto\nhttps://url1.com\nhttps://url2.com</code>"
+      "<code>/indexar NombreProyecto\nhttps://url1.com\nhttps://url2.com</code>\n" +
+      "<code>/gsc FlowerHome</code>"
   );
 }
 
@@ -336,6 +401,82 @@ async function handleIndexar(token, chatId, text, primeindexerKey) {
   }
 }
 
+async function handleGsc(token, chatId, text, kv, gscCredentials) {
+  const name = text.replace(/^\/gsc\s*/, "").trim();
+  const properties = (await kv.get("gsc_properties", "json")) || {};
+
+  if (!name) {
+    const available = Object.keys(properties);
+    if (!available.length) {
+      await sendTelegram(token, chatId, "\u26a0\ufe0f  No hay propiedades GSC configuradas.");
+      return;
+    }
+    await sendTelegram(
+      token, chatId,
+      `\u26a0\ufe0f  <b>Indica la web:</b>\n<code>/gsc ${available[0]}</code>\n\n<i>Disponibles: ${available.join(", ")}</i>`
+    );
+    return;
+  }
+
+  const siteUrl = properties[name] || properties[Object.keys(properties).find((k) => k.toLowerCase() === name.toLowerCase())];
+  if (!siteUrl) {
+    const available = Object.keys(properties).join(", ");
+    await sendTelegram(token, chatId, `\u26a0\ufe0f  <b>${name}</b> no tiene propiedad GSC.\n\n<i>Disponibles: ${available}</i>`);
+    return;
+  }
+
+  const waitMsg = await sendTelegram(token, chatId, `\u23f3 Consultando GSC para <b>${name}</b>...`);
+
+  try {
+    const accessToken = await getGscAccessToken(gscCredentials);
+
+    // Last 3 days (GSC data has ~2 day delay)
+    const now = new Date();
+    const end = new Date(now); end.setDate(end.getDate() - 1);
+    const start = new Date(now); start.setDate(start.getDate() - 3);
+    const startDate = start.toISOString().split("T")[0];
+    const endDate = end.toISOString().split("T")[0];
+
+    const data = await queryGsc(accessToken, siteUrl, startDate, endDate);
+
+    const spain = spainNow();
+    const lines = [
+      `\u{1F4CA}  <b>GSC Report: ${name}</b>`,
+      `\u{1F4C5}  ${formatDate(spain)}, ${formatTime(spain)}`,
+      `\u{1F310}  ${siteUrl}`,
+      `\u{1F4C6}  Datos: ${startDate} a ${endDate}`,
+      "\u2500".repeat(24),
+    ];
+
+    if (!data.rows || !data.rows.length) {
+      lines.push("\nNo hay datos para este periodo.");
+    } else {
+      // Total clicks
+      const totalClicks = data.rows.reduce((sum, r) => sum + r.clicks, 0);
+      const totalImpressions = data.rows.reduce((sum, r) => sum + r.impressions, 0);
+
+      lines.push(`\n\u{1F4C8}  <b>Total:</b> ${totalClicks} clicks  \u00b7  ${totalImpressions.toLocaleString()} impresiones\n`);
+      lines.push("<b>Top keywords:</b>\n");
+
+      for (let i = 0; i < data.rows.length; i++) {
+        const row = data.rows[i];
+        const pos = row.position ? row.position.toFixed(1) : "-";
+        lines.push(
+          `  ${i + 1}. <b>${row.keys[0]}</b>\n` +
+          `      ${row.clicks} clicks  \u00b7  ${row.impressions} imp  \u00b7  pos ${pos}`
+        );
+      }
+    }
+
+    await editTelegram(token, chatId, waitMsg.result.message_id, lines.join("\n"));
+  } catch (e) {
+    await editTelegram(
+      token, chatId, waitMsg.result.message_id,
+      `\u274c  <b>Error GSC</b>\n\n<code>${e.message.slice(0, 300)}</code>`
+    );
+  }
+}
+
 // ── Worker entry ────────────────────────────────────
 
 export default {
@@ -367,6 +508,8 @@ export default {
         await handleRemoveWeb(env.TELEGRAM_TOKEN, chatId, text, env.SITES_KV);
       } else if (cmd.startsWith("/indexar")) {
         await handleIndexar(env.TELEGRAM_TOKEN, chatId, text, env.PRIMEINDEXER_KEY);
+      } else if (cmd.startsWith("/gsc")) {
+        await handleGsc(env.TELEGRAM_TOKEN, chatId, text, env.SITES_KV, env.GSC_CREDENTIALS);
       }
     } catch (e) {
       console.error("Error handling update:", e);

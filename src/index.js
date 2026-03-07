@@ -178,24 +178,21 @@ async function getGscAccessToken(credentialsB64) {
   return data.access_token;
 }
 
-async function queryGsc(accessToken, siteUrl, startDate, endDate) {
+async function queryGsc(accessToken, siteUrl, startDate, endDate, dimensions, rowLimit) {
+  const body = { startDate, endDate, dataState: "all" };
+  if (dimensions) body.dimensions = dimensions;
+  if (rowLimit) body.rowLimit = rowLimit;
   const resp = await fetch(
     `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(siteUrl)}/searchAnalytics/query`,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        startDate,
-        endDate,
-        dimensions: ["query"],
-        rowLimit: 10,
-        dataState: "all",
-      }),
+      body: JSON.stringify(body),
     }
   );
   if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`GSC API ${resp.status}: ${body.slice(0, 200)}`);
+    const err = await resp.text();
+    throw new Error(`GSC API ${resp.status}: ${err.slice(0, 200)}`);
   }
   return await resp.json();
 }
@@ -431,35 +428,61 @@ async function handleGsc(token, chatId, text, kv, gscCredentials) {
   try {
     const accessToken = await getGscAccessToken(gscCredentials);
 
-    // Today's fresh data (unfinalized, last 24h)
+    // Yesterday + day before for comparison
     const now = new Date();
-    const today = now.toISOString().split("T")[0];
-    const startDate = today;
-    const endDate = today;
+    const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+    const dayBefore = new Date(now); dayBefore.setDate(dayBefore.getDate() - 2);
+    const dateY = yesterday.toISOString().split("T")[0];
+    const dateDB = dayBefore.toISOString().split("T")[0];
 
-    const data = await queryGsc(accessToken, siteUrl, startDate, endDate);
+    // 3 queries: yesterday totals, day-before totals, yesterday keywords
+    const [totals, prevTotals, keywords] = await Promise.all([
+      queryGsc(accessToken, siteUrl, dateY, dateY, null, null),
+      queryGsc(accessToken, siteUrl, dateDB, dateDB, null, null),
+      queryGsc(accessToken, siteUrl, dateY, dateY, ["query"], 25),
+    ]);
 
     const spain = spainNow();
     const lines = [
       `\u{1F4CA}  <b>GSC Report: ${name}</b>`,
       `\u{1F4C5}  ${formatDate(spain)}, ${formatTime(spain)}`,
       `\u{1F310}  ${siteUrl}`,
-      `\u{1F4C6}  Datos: ${today} (ultimas 24h)`,
+      `\u{1F4C6}  Ultimas 24h`,
       "\u2500".repeat(24),
     ];
 
-    if (!data.rows || !data.rows.length) {
-      lines.push("\nNo hay datos para este periodo.");
+    if (totals.rows && totals.rows.length) {
+      const t = totals.rows[0];
+      const ctr = (t.ctr * 100).toFixed(1);
+      const pos = t.position.toFixed(1);
+
+      let diffLine = "";
+      if (prevTotals.rows && prevTotals.rows.length) {
+        const p = prevTotals.rows[0];
+        const diffClicks = t.clicks - p.clicks;
+        const diffImp = t.impressions - p.impressions;
+        const sign = (n) => n > 0 ? `+${n}` : `${n}`;
+        const arrow = (n) => n > 0 ? "\u{1F53C}" : n < 0 ? "\u{1F53D}" : "\u25AA\uFE0F";
+        diffLine = `\n${arrow(diffClicks)}  vs ayer: ${sign(diffClicks)} clicks  \u00b7  ${sign(diffImp)} impresiones`;
+      }
+
+      lines.push(
+        `\n\u{1F4C8}  <b>${t.clicks}</b> clicks  \u00b7  <b>${t.impressions.toLocaleString()}</b> impresiones` +
+        `\n\u{1F4CA}  CTR: ${ctr}%  \u00b7  Posicion media: ${pos}` +
+        diffLine
+      );
     } else {
-      // Total clicks
-      const totalClicks = data.rows.reduce((sum, r) => sum + r.clicks, 0);
-      const totalImpressions = data.rows.reduce((sum, r) => sum + r.impressions, 0);
+      lines.push("\nNo hay datos para este periodo.");
+    }
 
-      lines.push(`\n\u{1F4C8}  <b>Total:</b> ${totalClicks} clicks  \u00b7  ${totalImpressions.toLocaleString()} impresiones\n`);
-      lines.push("<b>Top keywords:</b>\n");
+    if (keywords.rows && keywords.rows.length) {
+      // Calculate average impressions and filter keywords above it
+      const avgImp = keywords.rows.reduce((s, r) => s + r.impressions, 0) / keywords.rows.length;
+      const filtered = keywords.rows.filter((r) => r.impressions >= avgImp).slice(0, 10);
 
-      for (let i = 0; i < data.rows.length; i++) {
-        const row = data.rows[i];
+      lines.push(`\n<b>Top keywords:</b>\n`);
+      for (let i = 0; i < filtered.length; i++) {
+        const row = filtered[i];
         const pos = row.position ? row.position.toFixed(1) : "-";
         lines.push(
           `  ${i + 1}. <b>${row.keys[0]}</b>\n` +

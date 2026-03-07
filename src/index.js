@@ -143,8 +143,8 @@ function base64url(buf) {
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function getGscAccessToken(credentialsJson) {
-  const creds = JSON.parse(credentialsJson);
+async function getGscAccessToken(credentialsB64) {
+  const creds = JSON.parse(atob(credentialsB64));
   const now = Math.floor(Date.now() / 1000);
 
   const header = base64url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));

@@ -189,11 +189,19 @@ async function handleIndexar(token, chatId, text, primeindexerKey) {
   try {
     await indexUrls(primeindexerKey, projectName, urls);
     const urlList = urls.map((u) => `  \u2022 ${u}`).join("\n");
+    const now = new Date();
+    const spain = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
+    const date = `${String(spain.getDate()).padStart(2, "0")}/${String(spain.getMonth() + 1).padStart(2, "0")}/${spain.getFullYear()}`;
+    const time = `${String(spain.getHours()).padStart(2, "0")}:${String(spain.getMinutes()).padStart(2, "0")}`;
     await editTelegram(
       token,
       chatId,
       waitMsg.result.message_id,
-      `\u2705  <b>Proyecto creado</b>\n\n\u{1F4C1}  <b>${projectName}</b>\n\u{1F517}  ${urls.length} URL(s) enviadas:\n${urlList}\n\n<i>Las URLs se indexaran automaticamente.</i>`
+      `\u2705  <b>Indexacion enviada</b>\n\n` +
+      `\u{1F4C1}  <b>${projectName}</b>\n` +
+      `\u{1F4C5}  ${date} a las ${time}\n` +
+      `\u{1F517}  ${urls.length} URL(s):\n${urlList}\n\n` +
+      `<i>Las URLs se indexaran automaticamente.</i>`
     );
   } catch (e) {
     await editTelegram(

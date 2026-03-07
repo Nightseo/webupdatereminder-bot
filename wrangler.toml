@@ -1,0 +1,7 @@
+name = "webupdatereminder-bot"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+account_id = "13a17e727e9ce2c37d5450a869ac1273"
+
+[triggers]
+crons = ["0 6 * * *"]

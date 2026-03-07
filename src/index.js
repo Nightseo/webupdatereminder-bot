@@ -377,7 +377,39 @@ export default {
 
   async scheduled(event, env) {
     const sites = await getSites(env.SITES_KV);
-    const report = await buildReport(sites, parseInt(env.MAX_DAYS || "3"));
-    await sendTelegram(env.TELEGRAM_TOKEN, env.CHAT_ID, report);
+
+    // Daily report at 6:00 UTC (7:00 Spain)
+    if (event.cron === "0 6 * * *") {
+      const report = await buildReport(sites, parseInt(env.MAX_DAYS || "3"));
+      await sendTelegram(env.TELEGRAM_TOKEN, env.CHAT_ID, report);
+      return;
+    }
+
+    // Hourly uptime check - only alert if something is down
+    const down = [];
+    for (const site of sites) {
+      try {
+        const resp = await fetch(site.url, { method: "HEAD", redirect: "follow" });
+        if (!resp.ok) down.push({ name: site.name, url: site.url, reason: `HTTP ${resp.status}` });
+      } catch (e) {
+        down.push({ name: site.name, url: site.url, reason: "No responde" });
+      }
+    }
+
+    if (down.length === 0) return; // all good, silence
+
+    const spain = spainNow();
+    const lines = [
+      `\u{1F6A8}  <b>ALERTA DE CAIDA</b>`,
+      `\u{1F4C5}  ${formatDate(spain)}, ${formatTime(spain)}`,
+      "\u2500".repeat(24),
+    ];
+    for (const d of down) {
+      lines.push(`\n\u274c  <b>${d.name}</b>\n      ${d.reason}\n      ${d.url}`);
+    }
+    lines.push(`\n\u2500`.repeat(24));
+    lines.push(`\n\u26a0\ufe0f  ${down.length} de ${sites.length} webs caidas`);
+
+    await sendTelegram(env.TELEGRAM_TOKEN, env.CHAT_ID, lines.join("\n"));
   },
 };

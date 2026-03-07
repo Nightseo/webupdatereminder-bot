@@ -8,4 +8,5 @@ binding = "SITES_KV"
 id = "91b27c9159af4c17a2bef8c7c1f85a9d"
 
 [triggers]
-crons = ["0 6 * * *"]
+# Daily report 7:00 Spain + hourly uptime check
+crons = ["0 6 * * *", "0 * * * *"]
